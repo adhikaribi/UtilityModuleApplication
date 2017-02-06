@@ -18,11 +18,19 @@ namespace ApplicationUtilities
             return type != null ? Activator.CreateInstance(type) : null;
         }
 
+        public static object GetInstanceWithParameters(string moduleName, object[] parameters)
+        {
+            if (!Regex.IsMatch(moduleName, "ApplicationBusinessLogic.*"))
+                moduleName = $"ApplicationBusinessLogic.{moduleName}";
+            var type = Type.GetType($"{moduleName}, ApplicationBusinessLogic", false, true);
+            return type != null ? Activator.CreateInstance(type, parameters) : null;
+        }
+
         public static IEnumerable<string> GetAllModules()
         {
             // Search for all class name under ApplicationBusinessLogic namespace
             // Find the Assembly with class, for eg. IntercomUpdate and list all class names inside that assembly
-            var moduleAssembly = typeof(IntercomUpdate).Assembly;
+            var moduleAssembly = typeof(UpdateIntercomUser).Assembly;
             return moduleAssembly.GetTypes().Select(typ => typ.FullName).ToList();
         }
     }
