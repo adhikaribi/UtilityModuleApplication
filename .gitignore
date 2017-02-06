@@ -240,3 +240,6 @@ ModelManifest.xml
 
 # FAKE - F# Make
 .fake/
+/ClassLibrary1/ClassLibrary1.csproj
+/ClassLibrary1/Class1.cs
+/ClassLibrary1/Properties/AssemblyInfo.cs
