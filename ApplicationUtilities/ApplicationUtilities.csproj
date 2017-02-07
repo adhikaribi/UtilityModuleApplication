@@ -64,6 +64,10 @@
       <Project>{3A9DAEF0-87A7-4B42-BA3D-AA49488C2F54}</Project>
       <Name>ApplicationBusinessLogic</Name>
     </ProjectReference>
+    <ProjectReference Include="..\ApplicationCore\ApplicationCore.csproj">
+      <Project>{3863443D-CF3C-4D65-B3EE-EB7DDD44996B}</Project>
+      <Name>ApplicationCore</Name>
+    </ProjectReference>
   </ItemGroup>
   <Import Project="$(MSBuildToolsPath)\Microsoft.CSharp.targets" />
   <!-- To modify your build process, add your task inside one of the targets below and uncomment it. 

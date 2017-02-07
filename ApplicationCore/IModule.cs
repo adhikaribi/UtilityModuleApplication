@@ -2,10 +2,11 @@
 {
     public interface IModule
     {
+        // Name of the Module
         string Name { get; }
         // Description of the Module
         string Description { get; }
-        // TODO : May be required to add some functions, after the code analysis
+        // Run task on each module
         void Run();
     }
 }

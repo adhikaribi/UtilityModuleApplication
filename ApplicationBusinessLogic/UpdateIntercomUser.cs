@@ -11,13 +11,15 @@ using System.Net;
 using System.IO;
 using System.Data;
 using System.Threading;
+using System.Threading.Tasks;
 
 namespace ApplicationBusinessLogic
 {
     public class UpdateIntercomUser : IModule
     {
         private static string _moduleName = "UpdateIntercomUser";
-        private static string _description = "UpdateIntercomUser does all the updates";
+        private static string _description = "UpdateIntercomUser dumps all the user information and updates the required parameters like gsize, account and licenseoverlimit";
+        // e.g. 436540 
         private readonly int _accountId;
         public string Name => _moduleName;
         public UpdateIntercomUser(object accountId)
@@ -29,49 +31,34 @@ namespace ApplicationBusinessLogic
         {
             _accountId = 0;
         }
-        // TODO : Write logic for Run method here.
+
         public void Run()
         {
             Console.WriteLine("UpdateIntercomUser Started....");
 
-            DataTable table = new DataTable();
-
+            var table = new DataTable();
             //String sConnect1 = "Datasource=ec2-107-21-222-226.compute-1.amazonaws.com;User Id=root;password=laser;Persist Security Info=True;charset=utf8";
             //String sConnect1 = "Datasource=ec2-174-129-106-240.compute-1.amazonaws.com;User Id=activtrak;password=laser123;Persist Security Info=True;charset=utf8";
-            String sConnect1 = ConfigurationManager.ConnectionStrings["AccountsServer"].ConnectionString;
-            //args = new[] {"0"};
-
-            MySqlConnection con = new MySqlConnection(sConnect1);
-
-            String strCmd = strCmd = String.Format(@"
-use 1accountsdb; 
-select creator, acount, gsize, zaccountinfo.acctid, 0 as uflag, licensecount from zaccountinfo
-join accounts on zaccountinfo.acctid=accounts.acctid
-where zaccountinfo.acctid='{0}'
-order by zaccountinfo.acctid desc", _accountId);
-
-            //if (args.Count() != 1 /*&& args.Count() != 2*/)
-            //{
-            //    Console.WriteLine("UpdateIntercomUser startacctid");
-            //    return;
-            //}
-
-            //int limit = -1;
-            //if (args.Count() == 2)
-            //    limit = Convert.ToInt32(args[1]);
+            var connectionString = ConfigurationManager.ConnectionStrings["AccountsServer"].ConnectionString;
+            var commandText = $"USE 1accountsdb; " +
+                                     $"SELECT creator, acount, gsize, zaccountinfo.acctid, 0 as uflag, licensecount " +
+                                     $"FROM zaccountinfo JOIN accounts " +
+                                     $"ON zaccountinfo.acctid=accounts.acctid " +
+                                     $"WHERE zaccountinfo.acctid >= {_accountId} ORDER BY zaccountinfo.acctid DESC";
 
             try
             {
-                MySqlCommand cmd = new MySqlCommand(strCmd, con);
-                con.Open();
-                MySqlDataReader myReader = cmd.ExecuteReader();
-                table.Load(myReader);
-                myReader.Close();
-                con.Close();
-                table.PrimaryKey = new DataColumn[] {table.Columns[0]};
+                using (var connection = new MySqlConnection(connectionString))
+                {
+                    var cmd = new MySqlCommand(commandText, connection);
+                    connection.Open();
+                    var myReader = cmd.ExecuteReader();
+                    table.Load(myReader);
+                    myReader.Close();
+                }
 
-                Console.WriteLine("Number of accounts = {0}", table.Rows.Count.ToString());
-
+                table.PrimaryKey = new[] {table.Columns[0]};
+                Console.WriteLine($"Number of accounts = {table.Rows.Count}");
                 //Console.WriteLine("Press Enter to continue.");
                 //String line = Console.ReadLine();
                 //if ( line == null )
@@ -82,15 +69,12 @@ order by zaccountinfo.acctid desc", _accountId);
 
                 //API is immature, but may be useful in future.
                 // var userResults = new List<JToken>();
-
                 var scrollParam = "";
-                int retrievedUsers = 0;
-
+                var retrievedUsers = 0;
+                const string scrollurl = "https://api.intercom.io/users/scroll";
                 while (true)
                 {
-                    var scrollurl = "https://api.intercom.io/users/scroll";
-
-                    HttpWebRequest request = (HttpWebRequest) HttpWebRequest.Create(scrollurl + scrollParam);
+                    var request = (HttpWebRequest) WebRequest.Create(scrollurl + scrollParam);
                     request.AllowWriteStreamBuffering = true;
                     request.Method = "Get";
                     request.Accept = "application/json";
@@ -101,26 +85,27 @@ order by zaccountinfo.acctid desc", _accountId);
                     request.Headers.Add("Authorization", "Basic " + authInfo);
                     //request.Credentials = new NetworkCredential("d645d06179373abcfd63e2adf58402e05e558127", "396f0e4d375ee5a4866aafe2dcbefa46605a739e");
 
-                    //Send Web-Request and receive a Web-Response
-                    HttpWebResponse httpWebesponse = (HttpWebResponse) request.GetResponse();
+                    string response;
+                    // Send Web-Request and receive a Web-Response
+                    var httpWebesponse = (HttpWebResponse) request.GetResponse();
+                    // Translate data from the Web-Response to a string
+                    using (var userStream = httpWebesponse.GetResponseStream())
+                    {
+                        using (var streamreader = new StreamReader(userStream, Encoding.UTF8))
+                        {
+                            response = streamreader.ReadToEnd();
+                        }
+                    }
 
-                    //Translate data from the Web-Response to a string
-                    Stream userStream = httpWebesponse.GetResponseStream();
-                    StreamReader streamreader = new StreamReader(userStream, Encoding.UTF8);
-                    string response = streamreader.ReadToEnd();
-                    streamreader.Close();
-
-
-                    JObject jsonresponse = (JObject) JsonConvert.DeserializeObject(response);
+                    var jsonresponse = (JObject) JsonConvert.DeserializeObject(response);
                     var users = jsonresponse["users"];
                     //userResults.Add(users);
 
                     foreach (var user in users)
                     {
-                        DataRow row = table.Rows.Find(user["email"].ToString());
+                        var row = table.Rows.Find(user["email"].ToString());
                         if (row == null)
-                            Console.WriteLine(String.Format("No zaccountinfo for {0} {1}", user["name"].ToString(),
-                                user["email"].ToString()));
+                            Console.WriteLine($"No zaccountinfo for {user["name"]} {user["email"]}");
                         else
                         {
                             row[4] = 1;
@@ -128,23 +113,19 @@ order by zaccountinfo.acctid desc", _accountId);
                         }
                     }
 
-
                     JToken scrollToken;
                     jsonresponse.TryGetValue("scroll_param", out scrollToken);
-                    scrollParam = $"?scroll_param={scrollToken.ToString()}";
+                    scrollParam = $"?scroll_param={scrollToken?.ToString()}";
 
                     var count = users.Count();
-
-
                     retrievedUsers += count;
+
                     Console.WriteLine(
-                        $"{users.Count()} ({retrievedUsers}) users retrieved, next scrolltoken: {scrollParam}");
+                        $"{count} ({retrievedUsers}) users retrieved, next scrolltoken: {scrollParam}");
                     if (count == 0) break;
                 }
 
-
                 //Console.WriteLine("Processing User Results");
-
                 //foreach (JObject user in userResults.SelectMany(ur => ur))
                 //{
                 //    DataRow row = table.Rows.Find(user["email"].ToString());
@@ -156,8 +137,6 @@ order by zaccountinfo.acctid desc", _accountId);
                 //        Console.WriteLine(String.Format("Yes zaccountinfo for {0} {1}", user["name"].ToString(), user["email"].ToString()));
                 //    }
                 //}
-
-                Console.WriteLine("Finished Processing User Results");
 
                 //int created_since = 0;
                 //string stop_id = "start";
@@ -234,19 +213,21 @@ order by zaccountinfo.acctid desc", _accountId);
                 //    }
                 //}
 
+                Console.WriteLine("Finished Processing User Results");
 
-                for (int i = 0; i < table.Rows.Count; i++)
+                for (var i = 0; i < table.Rows.Count; i++)
                 {
                     if ((long) table.Rows[i][4] == 0)
                         continue;
 
                     Console.WriteLine("{0}", table.Rows[i].Field<UInt32>(3));
 
-                    String creator = table.Rows[i].Field<String>(0);
-                    UInt32 acount = table.Rows[i].Field<Object>(1) == null ? 0 : table.Rows[i].Field<UInt32>(1);
-                    ulong gsize = table.Rows[i].Field<Object>(2) == null ? 0 : table.Rows[i].Field<UInt64>(2);
+                    var creator = table.Rows[i].Field<String>(0);
+                    var acount = table.Rows[i].Field<Object>(1) == null ? 0 : table.Rows[i].Field<UInt32>(1);
+                    var gsize = table.Rows[i].Field<Object>(2) == null ? 0 : table.Rows[i].Field<UInt64>(2);
                     // Get the licenseCount information from the database
-                    var licenseCount = table.Rows[i].Field<Object>(5) == null ? 0 : table.Rows[i].Field<UInt32>(5);
+                    // Since the licensecount column in db is nullable type, use signed integer instead of unsigned (cast exception arises if UInt32 is used)
+                    var licenseCount = table.Rows[i].Field<Object>(5) == null ? 0 : table.Rows[i].Field<Int32>(5);
 
                     //POST https://api.intercom.io/v1/users
                     //EXAMPLE REQUEST
@@ -274,20 +255,21 @@ order by zaccountinfo.acctid desc", _accountId);
                     //            "last_request_at" : 1300000000
                     //          }'
 
-                    JObject cu = new JObject();
-                    cu.Add("acount", acount);
-                    cu.Add("gsize", gsize);
-                    cu.Add("licenseoverlimit", CheckLicenseOvercount(licenseCount, gsize));
+                    var currentUser = new JObject
+                    {
+                        {"acount", acount},
+                        {"gsize", gsize},
+                        {"overstorage", CheckOverStorage(licenseCount, gsize)},
+                        {"overagentlimit",  CheckOverAgentLimit(licenseCount, acount)}
+                    };
 
-                    JObject user = new JObject();
-                    user.Add("email", creator);
-                    user.Add("custom_data", cu);
+                    var user = new JObject {{"email", creator}, {"custom_data", currentUser}};
 
-                    UTF8Encoding encoding = new UTF8Encoding();
-                    byte[] data = encoding.GetBytes(user.ToString());
+                    var encoding = new UTF8Encoding();
+                    var data = encoding.GetBytes(user.ToString());
 
                     retry:
-                    HttpWebRequest request = (HttpWebRequest) HttpWebRequest.Create("https://api.intercom.io/users");
+                    var request = (HttpWebRequest) WebRequest.Create("https://api.intercom.io/users");
                     request.AllowWriteStreamBuffering = true;
                     request.Method = "POST";
                     request.ContentLength = data.Length;
@@ -300,37 +282,35 @@ order by zaccountinfo.acctid desc", _accountId);
                     request.Headers.Add("Authorization", "Basic " + authInfo);
                     //request.Credentials = new NetworkCredential("d645d06179373abcfd63e2adf58402e05e558127", "396f0e4d375ee5a4866aafe2dcbefa46605a739e");
 
-                    Stream newStream = request.GetRequestStream();
-                    newStream.Write(data, 0, data.Length);
-                    newStream.Close();
-
+                    using (var newStream = request.GetRequestStream())
+                        newStream.Write(data, 0, data.Length);
 
                     //Send Web-Request and receive a Web-Response
                     try
                     {
-                        HttpWebResponse httpWebResponse = (HttpWebResponse) request.GetResponse();
+                        var httpWebResponse = (HttpWebResponse) request.GetResponse();
 
                         //Translate data from the Web-Response to a string
-                        Stream outStream = httpWebResponse.GetResponseStream();
-                        StreamReader streamreader = new StreamReader(outStream, Encoding.UTF8);
-                        string response = streamreader.ReadToEnd();
-                        streamreader.Close();
+                        using (var outStream = httpWebResponse.GetResponseStream())
+                        {
+                            var streamreader = new StreamReader(outStream, Encoding.UTF8);
+                            streamreader.ReadToEnd();
+                        }
                     }
                     catch (WebException werr)
                     {
                         if (((HttpWebResponse) werr.Response).StatusCode.ToString() == "429")
                         {
-                            long unixreset = Convert.ToInt64(werr.Response.Headers["X-RateLimit-Reset"]);
-                            long waitsecs = unixreset - UnixTimeNow() + 10;
+                            var unixreset = Convert.ToInt64(werr.Response.Headers["X-RateLimit-Reset"]);
+                            var waitsecs = unixreset - UnixTimeNow() + 10;
                             //Some dependency here on server clock accuracy
-                            int waitms = (int) (waitsecs * 1000);
-                            Console.WriteLine("Waiting {0}s for request rate reset", waitsecs);
+                            var waitms = (int) (waitsecs * 1000);
+                            Console.WriteLine($"Waiting {waitsecs}s for request rate reset");
                             Thread.Sleep(waitms);
                             goto retry;
                         }
                         else
                             Console.WriteLine(werr.Message);
-
                     }
                     catch (Exception err)
                     {
@@ -344,16 +324,25 @@ order by zaccountinfo.acctid desc", _accountId);
                 Console.WriteLine(err.Message);
             }
 
-            Console.WriteLine("UpdateIntercomUser Ended");
+            Console.WriteLine("UpdateIntercomUser Completed");
         }
 
         public string Description => _description;
 
-        private bool CheckLicenseOvercount(UInt32 licenseCount, ulong size)
+        // If the licenseCount is less than or equal to 3 and the size is greater than 3 gigs, its overstorage
+        private static bool CheckOverStorage(Int32 licenseCount, ulong size)
         {
-            bool result = licenseCount <= 3 && size > 3 * 1024 * 1024;
+            var result = licenseCount <= 3 && size > 3 * 1024 * 1024;
             return result;
         }
+
+        // If the account is greater than licenseCount (> 3), its overagentlimit
+        private static bool CheckOverAgentLimit(Int32 licenseCount, UInt32 account)
+        {
+            var allowedLicenses = Math.Max(licenseCount, 3);
+            return account > allowedLicenses;
+        }
+
         private static long UnixTimestampFromDateTime(DateTime date)
         {
             long unixTimestamp = date.Ticks - new DateTime(1970, 1, 1).Ticks;
@@ -367,7 +356,6 @@ order by zaccountinfo.acctid desc", _accountId);
             unixTimestamp /= TimeSpan.TicksPerSecond;
             return unixTimestamp;
         }
-
 
     }
 }
